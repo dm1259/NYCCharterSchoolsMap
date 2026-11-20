@@ -1,6 +1,6 @@
 # NYC Charter Schools Interactive Explorer
 
-**Live Demo:** [View Interactive Map](https://<your-username>.github.io/<your-repo-name>/](https://dm1259.github.io/NYCCharterSchoolsMap/))
+**Live Demo:** [View Interactive Map](https://dm1259.github.io/NYCCharterSchoolsMap/)
 
 ## Overview
 An interactive, zero-backend web application mapping all **227 active charter schools** across New York City's five boroughs. Built to make school discovery, geographic clustering, and site-level lookup fast and intuitive for parents, researchers, and policy analysts.
