@@ -6,6 +6,7 @@
   <title>NYC Charter Schools Map</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
+    * { box-sizing: border-box; }
     body { margin: 0; font-family: system-ui, -apple-system, sans-serif; }
     #header {
       padding: 12px 20px;
@@ -16,9 +17,16 @@
       align-items: center;
       flex-wrap: wrap;
       gap: 10px;
+      position: relative;
+      z-index: 1000;
     }
     #header h1 { margin: 0; font-size: 1.15rem; }
-    .controls { display: flex; align-items: center; gap: 12px; }
+    .controls {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
     input, select {
       padding: 6px 10px;
       border-radius: 6px;
@@ -28,6 +36,75 @@
       font-size: 0.9rem;
     }
     input::placeholder { color: #94a3b8; }
+    input:focus, select:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+
+    /* Searchable School Dropdown */
+    .school-picker {
+      position: relative;
+      width: 270px;
+    }
+    #schoolSearch {
+      width: 100%;
+      padding-right: 28px;
+    }
+    #clearSchool {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      color: #94a3b8;
+      font-size: 1rem;
+      cursor: pointer;
+      display: none;
+      padding: 0 4px;
+      line-height: 1;
+    }
+    #clearSchool:hover { color: #f8fafc; }
+    #schoolDropdown {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      right: 0;
+      max-height: 280px;
+      overflow-y: auto;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);
+      display: none;
+      z-index: 2000;
+    }
+    .dropdown-item {
+      padding: 8px 10px;
+      cursor: pointer;
+      border-bottom: 1px solid #293548;
+      font-size: 0.85rem;
+    }
+    .dropdown-item:last-child { border-bottom: none; }
+    .dropdown-item:hover, .dropdown-item.active {
+      background: #334155;
+    }
+    .dropdown-item .school-title {
+      color: #f8fafc;
+      font-weight: 500;
+      display: block;
+    }
+    .dropdown-item .school-sub {
+      color: #94a3b8;
+      font-size: 0.75rem;
+    }
+    .dropdown-empty {
+      padding: 10px;
+      color: #94a3b8;
+      font-size: 0.85rem;
+      text-align: center;
+    }
+
     #count { font-size: 0.9rem; color: #94a3b8; }
     #map { height: calc(100vh - 54px); width: 100%; }
   </style>
@@ -36,7 +113,17 @@
   <div id="header">
     <h1>NYC Charter Schools</h1>
     <div class="controls">
-      <input type="text" id="searchInput" placeholder="Search school or neighborhood..." />
+      <div class="school-picker" id="schoolPicker">
+        <input
+          type="text"
+          id="schoolSearch"
+          placeholder="Select or search a school..."
+          autocomplete="off"
+        />
+        <button type="button" id="clearSchool" title="Clear selection">×</button>
+        <div id="schoolDropdown"></div>
+      </div>
+
       <select id="boroughFilter">
         <option value="ALL">All Boroughs (227)</option>
         <option value="BROOKLYN">Brooklyn (87)</option>
@@ -45,6 +132,7 @@
         <option value="QUEENS">Queens (20)</option>
         <option value="STATEN IS">Staten Island (3)</option>
       </select>
+
       <span id="count">Loading schools...</span>
     </div>
   </div>
@@ -53,7 +141,10 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
   <script>
-    const map = L.map('map').setView([40.7128, -74.0060], 11);
+    const DEFAULT_CENTER = [40.7128, -74.0060];
+    const DEFAULT_ZOOM = 11;
+
+    const map = L.map('map').setView(DEFAULT_CENTER, DEFAULT_ZOOM);
 
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
@@ -77,43 +168,108 @@
     };
 
     let allSchools = [];
+    let selectedSchool = null;
     const markersLayer = L.layerGroup().addTo(map);
 
-    function renderMarkers() {
-      const borough = document.getElementById('boroughFilter').value;
-      const query = document.getElementById('searchInput').value.trim().toLowerCase();
+    const schoolSearch = document.getElementById('schoolSearch');
+    const schoolDropdown = document.getElementById('schoolDropdown');
+    const clearSchoolBtn = document.getElementById('clearSchool');
+    const boroughFilter = document.getElementById('boroughFilter');
+
+    function getBoroughFilteredSchools() {
+      const borough = boroughFilter.value;
+      return allSchools.filter(row => {
+        const lat = parseFloat(row['Latitude']);
+        const lng = parseFloat(row['Longitude']);
+        const rawBorough = (row['Borough'] || '').trim().toUpperCase();
+        if (isNaN(lat) || isNaN(lng)) return false;
+        if (borough !== 'ALL' && rawBorough !== borough) return false;
+        return true;
+      });
+    }
+
+    function renderDropdown() {
+      const query = schoolSearch.value.trim().toLowerCase();
+      const candidates = getBoroughFilteredSchools().filter(row => {
+        if (!query || selectedSchool) return true;
+        const name = (row['Location Name'] || '').toLowerCase();
+        const neighborhood = (row['NTA_Name'] || '').toLowerCase();
+        const dbn = (row['ATS System Code'] || '').toLowerCase();
+        return name.includes(query) || neighborhood.includes(query) || dbn.includes(query);
+      });
+
+      schoolDropdown.innerHTML = '';
+
+      if (candidates.length === 0) {
+        schoolDropdown.innerHTML = '<div class="dropdown-empty">No matching schools</div>';
+        return;
+      }
+
+      candidates.forEach(row => {
+        const item = document.createElement('div');
+        item.className = 'dropdown-item';
+        const rawBorough = (row['Borough'] || '').trim().toUpperCase();
+        const displayBorough = BOROUGH_LABELS[rawBorough] || rawBorough;
+        const neighborhood = row['NTA_Name'] ? `${row['NTA_Name']} · ` : '';
+
+        item.innerHTML = `
+          <span class="school-title">${row['Location Name']}</span>
+          <span class="school-sub">${neighborhood}${displayBorough}</span>
+        `;
+
+        item.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          selectSchool(row);
+        });
+
+        schoolDropdown.appendChild(item);
+      });
+    }
+
+    function selectSchool(row) {
+      selectedSchool = row;
+      schoolSearch.value = row['Location Name'] || '';
+      clearSchoolBtn.style.display = 'block';
+      schoolDropdown.style.display = 'none';
+      renderMarkers(true);
+    }
+
+    function clearSelectedSchool(resetView = true) {
+      selectedSchool = null;
+      schoolSearch.value = '';
+      clearSchoolBtn.style.display = 'none';
+      renderMarkers(false);
+      if (resetView) {
+        map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+      }
+    }
+
+    function renderMarkers(zoomToSelected = false) {
       markersLayer.clearLayers();
+      const schools = selectedSchool ? [selectedSchool] : getBoroughFilteredSchools();
       let plotted = 0;
 
-      allSchools.forEach(row => {
+      schools.forEach(row => {
         const lat = parseFloat(row['Latitude']);
         const lng = parseFloat(row['Longitude']);
         const rawBorough = (row['Borough'] || '').trim().toUpperCase();
 
-        if (isNaN(lat) || isNaN(lng)) return;
-        if (borough !== 'ALL' && rawBorough !== borough) return;
-
+        plotted++;
         const name = row['Location Name'] || 'Charter School';
         const neighborhood = row['NTA_Name'] || '';
         const address = row['Primary Address'] || '';
-
-        if (query && !name.toLowerCase().includes(query) && !neighborhood.toLowerCase().includes(query) && !address.toLowerCase().includes(query)) {
-          return;
-        }
-
-        plotted++;
         const zip = row['Zip'] || '';
         const grades = row['Grades Final'] || row['Grades'] || 'N/A';
         const dbn = row['ATS System Code'] || '';
         const displayBorough = BOROUGH_LABELS[rawBorough] || rawBorough;
         const color = BOROUGH_COLORS[rawBorough] || '#2563eb';
 
-        L.circleMarker([lat, lng], {
-          radius: 6.5,
+        const marker = L.circleMarker([lat, lng], {
+          radius: selectedSchool ? 9 : 6.5,
           fillColor: color,
           color: '#ffffff',
-          weight: 1.5,
-          fillOpacity: 0.88
+          weight: 2,
+          fillOpacity: 0.92
         })
         .bindPopup(
           `<strong>${name}</strong><br>` +
@@ -123,6 +279,11 @@
           (dbn ? `<br><small style="color:#64748b;">DBN: ${dbn}</small>` : '')
         )
         .addTo(markersLayer);
+
+        if (zoomToSelected) {
+          map.setView([lat, lng], 15);
+          marker.openPopup();
+        }
       });
 
       document.getElementById('count').textContent = `${plotted} school${plotted === 1 ? '' : 's'} shown`;
@@ -133,13 +294,43 @@
       header: true,
       skipEmptyLines: true,
       complete: function(results) {
-        allSchools = results.data;
+        allSchools = results.data.sort((a, b) =>
+          (a['Location Name'] || '').localeCompare(b['Location Name'] || '')
+        );
         renderMarkers();
       }
     });
 
-    document.getElementById('boroughFilter').addEventListener('change', renderMarkers);
-    document.getElementById('searchInput').addEventListener('input', renderMarkers);
+    schoolSearch.addEventListener('focus', () => {
+      renderDropdown();
+      schoolDropdown.style.display = 'block';
+    });
+
+    schoolSearch.addEventListener('input', () => {
+      if (selectedSchool) {
+        selectedSchool = null;
+        renderMarkers(false);
+      }
+      clearSchoolBtn.style.display = schoolSearch.value ? 'block' : 'none';
+      renderDropdown();
+      schoolDropdown.style.display = 'block';
+    });
+
+    schoolSearch.addEventListener('blur', () => {
+      schoolDropdown.style.display = 'none';
+    });
+
+    clearSchoolBtn.addEventListener('click', () => {
+      clearSelectedSchool(true);
+    });
+
+    boroughFilter.addEventListener('change', () => {
+      selectedSchool = null;
+      schoolSearch.value = '';
+      clearSchoolBtn.style.display = 'none';
+      renderMarkers(false);
+      map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+    });
   </script>
 </body>
 </html>
